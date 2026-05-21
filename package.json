@@ -1,8 +1,14 @@
 {
   "name": "pi-emacs-which-key",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Emacs-style prefix keys and which-key hints for Pi's interactive editor.",
-  "keywords": ["pi-package", "pi", "emacs", "keybindings", "which-key"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "emacs",
+    "keybindings",
+    "which-key"
+  ],
   "license": "MIT",
   "type": "module",
   "author": "Yongwei Yuan",
@@ -15,7 +21,9 @@
   },
   "homepage": "https://github.com/yongweiy/pi-emacs-which-key#readme",
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": [
+      "./extensions"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
