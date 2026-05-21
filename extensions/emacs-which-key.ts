@@ -136,7 +136,6 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (matchesKey(data, alt("x"))) {
-        this.showPrefix("M-x");
         this.openCommandPrompt();
         return;
       }
