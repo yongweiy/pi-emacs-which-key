@@ -115,8 +115,23 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      if (isEscape(data) && this.panelVisible) {
-        this.hidePanel();
+      if (isEscape(data)) {
+        if (this.panelVisible) {
+          this.hidePanel();
+          // First ESC dismisses the which-key/info panel. Press ESC again to
+          // interrupt an active agent turn, matching modal UI expectations.
+          return;
+        }
+        // Call Pi's current interrupt handler directly. This preserves normal
+        // behavior while streaming/retrying/compacting, where Pi swaps the
+        // default editor's onEscape callback dynamically.
+        if (this.isAutocompleteOpen()) {
+          this.editorHandleInput(data);
+        } else if (this.onEscape) {
+          this.onEscape();
+        } else {
+          super.handleInput(data);
+        }
         return;
       }
 
@@ -156,6 +171,10 @@ export default function (pi: ExtensionAPI) {
       }
 
       super.handleInput(data);
+    }
+
+    private isAutocompleteOpen(): boolean {
+      return Boolean((this as any).isShowingAutocomplete?.());
     }
 
     private translateEmacsKey(data: string): string | undefined {
