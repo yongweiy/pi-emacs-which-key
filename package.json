@@ -1,6 +1,6 @@
 {
   "name": "pi-emacs-which-key",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Emacs-style prefix keys and which-key hints for Pi's interactive editor.",
   "keywords": [
     "pi-package",
