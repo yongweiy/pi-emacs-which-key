@@ -21,7 +21,8 @@ Emacs-style editing and prefix-key discoverability for Pi's interactive editor.
 - `C-x o` → toggle tool output
 - `C-x C-e` → external editor
 - `C-x C-c` → quit Pi
-- `C-c h` → `/handoff`
+- `C-c /` → open Pi slash command completion
+- `C-c <letter>` → extension/package command submenu (letters are assigned from meaningful extension/package names)
 - `C-c r` → `/reload`
 - `C-h b` → `/hotkeys`
 - `C-h k` → describe next key
@@ -51,6 +52,20 @@ Or run for one session without installing:
 ```bash
 pi -e /path/to/pi-emacs-which-key/extensions/emacs-which-key.ts
 ```
+
+## Hierarchical C-c menus
+
+`C-c` keeps Pi utility entries at the top level and groups extension commands by their owning extension/package:
+
+```text
+C-c /   native Pi slash-command completion
+C-c r   reload Pi resources (/reload)
+C-c ?   show the top-level C-c menu
+C-c c   pi-crew extension commands, for example
+C-c p   pi-permission-system extension commands, for example
+```
+
+Group letters come from meaningful extension/package names. If a letter is already used, emacs-which-key tries the next meaningful letter before falling back to the alphabet. Inside a group submenu, `q` goes back to the top-level `C-c` menu and `/` opens native slash completion.
 
 ## Optional selector keybindings
 

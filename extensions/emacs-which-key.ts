@@ -1,7 +1,7 @@
 import { CustomEditor, DynamicBorder, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Editor, matchesKey, Text, visibleWidth } from "@earendil-works/pi-tui";
 
-type Prefix = "C-x" | "C-c" | "C-h" | "M-x" | "C-h k";
+type Prefix = "C-x" | "C-c" | "C-h" | "M-x" | "C-h k" | `C-c ${string}`;
 
 type Binding = {
   key: string;
@@ -10,7 +10,133 @@ type Binding = {
   run: (editor: any) => void;
 };
 
+export type SourceInfo = {
+  path: string;
+  source: string;
+  scope?: "user" | "project" | "temporary";
+  origin?: "package" | "top-level";
+  baseDir?: string;
+};
+
+export type PiCommand = {
+  name: string;
+  description?: string;
+  source?: string;
+  sourceInfo?: SourceInfo;
+};
+
+export type CommandGroup = {
+  key: string;
+  prefix: `C-c ${string}`;
+  label: string;
+  ownerId: string;
+  commands: PiCommand[];
+};
+
 const WIDGET_ID = "emacs-which-key";
+const TOP_LEVEL_C_C_RESERVED_KEYS = new Set(["/", "?", "q", "r"]);
+
+export function commandGroupPrefix(key: string): `C-c ${string}` {
+  return `C-c ${key}`;
+}
+
+function pathBasename(value: string | undefined): string {
+  if (!value) return "";
+  const parts = value.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? value;
+}
+
+function pathDirname(value: string | undefined): string {
+  if (!value) return "";
+  const parts = value.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.slice(0, -1).join("/");
+}
+
+function stripKnownSourcePrefix(value: string): string {
+  return value.replace(/^(extension|npm|git):/, "");
+}
+
+function stripVersionOrRef(value: string): string {
+  const lastSlash = value.lastIndexOf("/");
+  const lastAt = value.lastIndexOf("@");
+  if (lastAt > 0 && lastAt > lastSlash) return value.slice(0, lastAt);
+  return value;
+}
+
+function labelFromSource(source: string): string {
+  const withoutPrefix = stripKnownSourcePrefix(source);
+  const looksLikeGitPath = withoutPrefix.includes(":") || withoutPrefix.includes("/");
+  const sourceName = looksLikeGitPath ? pathBasename(withoutPrefix) : withoutPrefix;
+  return stripVersionOrRef(sourceName).replace(/\.git$/, "") || "extensions";
+}
+
+function labelFromPath(filePath: string | undefined, baseDir: string | undefined): string {
+  const base = pathBasename(filePath);
+  if (/^index\.(ts|js)$/.test(base)) return pathBasename(baseDir || pathDirname(filePath)) || "extensions";
+  return base.replace(/\.(ts|js)$/, "") || "extensions";
+}
+
+export function commandOwnerLabel(command: PiCommand): string {
+  const info = command.sourceInfo;
+  if (!info) return "extensions";
+  if (info.origin === "package" || (info.source && info.source !== "local")) return labelFromSource(info.source);
+  return labelFromPath(info.path, info.baseDir);
+}
+
+function commandOwnerId(command: PiCommand): string {
+  const info = command.sourceInfo;
+  if (!info) return "unknown";
+  if (info.origin === "package") return `package:${info.source}`;
+  if (info.source && info.source !== "local") return `source:${info.source}:${info.scope ?? "temporary"}`;
+  return `top-level:${info.path}`;
+}
+
+export function candidateKeysForLabel(label: string): string[] {
+  const rawTokens = label
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const meaningfulTokens = rawTokens.filter((token) => !["pi", "extension", "package", "plugin"].includes(token));
+  const tokens = meaningfulTokens.length > 0 ? meaningfulTokens : rawTokens;
+  const candidates = [
+    ...tokens.map((token) => token[0]),
+    ...tokens.join("").split(""),
+    ..."abcdefghijklmnopqrstuvwxyz0123456789".split(""),
+  ];
+  return candidates.filter((char, index, chars) => /^[a-z0-9]$/.test(char) && chars.indexOf(char) === index);
+}
+
+export function buildExtensionCommandGroups(
+  commands: PiCommand[],
+  reservedKeys: ReadonlySet<string> = TOP_LEVEL_C_C_RESERVED_KEYS,
+): CommandGroup[] {
+  const groupsByOwner = new Map<string, { label: string; commands: PiCommand[] }>();
+
+  for (const command of commands) {
+    if (!command?.name || command.source !== "extension") continue;
+    const ownerId = commandOwnerId(command);
+    const existing = groupsByOwner.get(ownerId);
+    if (existing) {
+      existing.commands.push(command);
+    } else {
+      groupsByOwner.set(ownerId, { label: commandOwnerLabel(command), commands: [command] });
+    }
+  }
+
+  const reserved = new Set(reservedKeys);
+  const groups = Array.from(groupsByOwner.entries()).sort((left, right) => left[1].label.localeCompare(right[1].label));
+  const keyedGroups: CommandGroup[] = [];
+
+  for (const [ownerId, group] of groups) {
+    const key = candidateKeysForLabel(group.label).find((candidate) => !reserved.has(candidate));
+    if (!key) continue;
+    reserved.add(key);
+    keyedGroups.push({ key, prefix: commandGroupPrefix(key), label: group.label, ownerId, commands: group.commands });
+  }
+
+  return keyedGroups;
+}
 
 export default function (pi: ExtensionAPI) {
   function ctrl(letter: string): string {
@@ -247,7 +373,12 @@ export default function (pi: ExtensionAPI) {
 
       const label = keyLabel(data);
       const direct = this.describeDirectKey(data);
-      const prefixed = [...this.bindingsFor("C-x"), ...this.bindingsFor("C-c"), ...this.bindingsFor("C-h")]
+      const prefixed = [
+        ...this.bindingsFor("C-x"),
+        ...this.bindingsFor("C-c"),
+        ...this.extensionCommandGroups().flatMap((group) => this.bindingsFor(group.prefix)),
+        ...this.bindingsFor("C-h"),
+      ]
         .filter((binding) => keyMatches(data, binding.key))
         .map((binding) => `${binding.label}: ${binding.description}`);
 
@@ -290,7 +421,7 @@ export default function (pi: ExtensionAPI) {
 
     private renderWhichKey(prefix: Prefix): void {
       const bindings = this.bindingsFor(prefix);
-      const title = prefix === "M-x" ? "M-x execute-extended-command" : `${prefix} prefix`;
+      const title = this.titleForPrefix(prefix);
       const maxKey = Math.max(...bindings.map((binding) => visibleWidth(binding.label)), 1);
       const lines = bindings.map((binding) => `${binding.label.padEnd(maxKey)}  ${binding.description}`);
       this.setPanel(title, lines, this.lastKeyDescription || "C-g / ESC  cancel");
@@ -313,16 +444,80 @@ export default function (pi: ExtensionAPI) {
       );
     }
 
+    private titleForPrefix(prefix: Prefix): string {
+      if (prefix === "M-x") return "M-x execute-extended-command";
+      const group = this.commandGroupForPrefix(prefix);
+      return group ? `${prefix} ${group.label}` : `${prefix} prefix`;
+    }
+
+    private extensionCommandGroups(): CommandGroup[] {
+      const commands = typeof pi.getCommands === "function" ? (pi.getCommands() as PiCommand[]) : [];
+      return buildExtensionCommandGroups(commands);
+    }
+
+    private controlCBindings(): Binding[] {
+      const extensionGroups = this.extensionCommandGroups().map((group) => ({
+        key: group.key,
+        label: group.key,
+        description: `${group.label} extension commands (${group.commands.length})`,
+        run: (editor: any) => editor.showPrefix(group.prefix),
+      }));
+
+      return [
+        { key: "/", label: "/", description: "open Pi slash command completion", run: (editor) => editor.openCommandPrompt() },
+        ...extensionGroups,
+        { key: "r", label: "r", description: "reload Pi resources (/reload)", run: (editor) => editor.runSlash("/reload") },
+        { key: "q", label: "q", description: "hide emacs-which-key panel", run: (editor) => editor.hidePanel() },
+        { key: "?", label: "?", description: "show this C-c menu", run: (editor) => editor.renderWhichKey("C-c") },
+      ];
+    }
+
+    private commandGroupForPrefix(prefix: Prefix): CommandGroup | undefined {
+      if (prefix === "C-c" || !prefix.startsWith("C-c ")) return undefined;
+      return this.extensionCommandGroups().find((group) => group.prefix === prefix);
+    }
+
+    private commandBindingsForGroup(group: CommandGroup, menuPrefix: Prefix): Binding[] {
+      const reserved = new Set(["/", "?", "q"]);
+      const bindings: Binding[] = [
+        { key: "/", label: "/", description: "open Pi slash command completion", run: (editor) => editor.openCommandPrompt() },
+        { key: "q", label: "q", description: "back to C-c", run: (editor) => editor.showPrefix("C-c") },
+        { key: "?", label: "?", description: "show this menu", run: (editor) => editor.renderWhichKey(menuPrefix) },
+      ];
+
+      for (const command of group.commands) {
+        const key = this.pickCommandKey(command.name, reserved);
+        if (!key) continue;
+        reserved.add(key);
+        bindings.push({
+          key,
+          label: key,
+          description: `/${command.name}${command.description ? ` — ${command.description}` : ""}`,
+          run: (editor) => editor.runSlash(`/${command.name}`),
+        });
+        if (bindings.length >= 24) break;
+      }
+
+      return bindings;
+    }
+
+    private pickCommandKey(commandName: string, reserved: Set<string>): string | undefined {
+      const candidates = `${commandName.toLowerCase()}abcdefghijklmnopqrstuvwxyz0123456789`
+        .split("")
+        .filter((char, index, chars) => /^[a-z0-9]$/.test(char) && chars.indexOf(char) === index);
+      return candidates.find((char) => !reserved.has(char));
+    }
+
     private bindingsFor(prefix: Prefix): Binding[] {
       if (prefix === "C-h k") return [];
 
       if (prefix === "C-c") {
-        return [
-          { key: "h", label: "h", description: "handoff session (/handoff)", run: (editor) => editor.runSlash("/handoff") },
-          { key: "r", label: "r", description: "reload Pi resources (/reload)", run: (editor) => editor.runSlash("/reload") },
-          { key: "q", label: "q", description: "hide emacs-which-key panel", run: (editor) => editor.hidePanel() },
-          { key: "?", label: "?", description: "show this C-c menu", run: (editor) => editor.renderWhichKey("C-c") },
-        ];
+        return this.controlCBindings();
+      }
+
+      const commandGroup = this.commandGroupForPrefix(prefix);
+      if (commandGroup) {
+        return this.commandBindingsForGroup(commandGroup, prefix);
       }
 
       if (prefix === "M-x") {

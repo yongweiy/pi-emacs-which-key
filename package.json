@@ -25,6 +25,9 @@
       "./extensions"
     ]
   },
+  "scripts": {
+    "test": "node --test"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
