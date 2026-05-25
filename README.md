@@ -65,7 +65,13 @@ C-c c   pi-crew extension commands, for example
 C-c p   pi-permission-system extension commands, for example
 ```
 
-Group letters come from meaningful extension/package names. If a letter is already used, emacs-which-key tries the next meaningful letter before falling back to the alphabet. Inside a group submenu, `q` goes back to the top-level `C-c` menu and `/` opens native slash completion.
+Group letters are assigned in this order: explicit environment overrides, curated known package keys, then meaningful extension/package name fallback. If a letter is already used, emacs-which-key tries the next meaningful letter before falling back to the alphabet. Inside a group submenu, `q` goes back to the top-level `C-c` menu and `/` opens native slash completion.
+
+Set `PI_EMACS_WHICH_KEY_C_C_GROUP_KEYS` to pin group keys. Use comma- or semicolon-separated `owner=key` entries, where `owner` is a group label such as `pi-crew` or an owner id such as `package:npm:@scope/pkg@1.0.0`; `key` must be one lowercase letter or digit. Example:
+
+```bash
+PI_EMACS_WHICH_KEY_C_C_GROUP_KEYS="pi-crew=c,alpha-package=a" pi
+```
 
 ## Optional selector keybindings
 

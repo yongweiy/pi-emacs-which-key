@@ -36,6 +36,17 @@ export type CommandGroup = {
 const WIDGET_ID = "emacs-which-key";
 const TOP_LEVEL_C_C_RESERVED_KEYS = new Set(["/", "?", "q", "r"]);
 
+export const C_C_GROUP_KEYS_ENV_VAR = "PI_EMACS_WHICH_KEY_C_C_GROUP_KEYS";
+
+export type BuildCommandGroupsOptions = {
+  groupKeyOverrides?: string;
+};
+
+const CURATED_C_C_GROUP_KEYS = new Map([
+  ["pi-crew", "c"],
+  ["pi-permission-system", "p"],
+]);
+
 export function commandGroupPrefix(key: string): `C-c ${string}` {
   return `C-c ${key}`;
 }
@@ -107,9 +118,46 @@ export function candidateKeysForLabel(label: string): string[] {
   return candidates.filter((char, index, chars) => /^[a-z0-9]$/.test(char) && chars.indexOf(char) === index);
 }
 
+function normalizeGroupKeyTarget(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isGroupKey(value: string | undefined): value is string {
+  return Boolean(value && /^[a-z0-9]$/.test(value));
+}
+
+function currentGroupKeyOverrideSpec(): string | undefined {
+  return (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[C_C_GROUP_KEYS_ENV_VAR];
+}
+
+function parseGroupKeyOverrides(spec: string | undefined): Map<string, string> {
+  const overrides = new Map<string, string>();
+  if (!spec) return overrides;
+
+  for (const rawEntry of spec.split(/[,;\n]+/)) {
+    const entry = rawEntry.trim();
+    if (!entry) continue;
+
+    const equalsIndex = entry.indexOf("=");
+    const separatorIndex = equalsIndex >= 0 ? equalsIndex : entry.lastIndexOf(":");
+    if (separatorIndex <= 0) continue;
+
+    const target = normalizeGroupKeyTarget(entry.slice(0, separatorIndex));
+    const key = entry.slice(separatorIndex + 1).trim().toLowerCase();
+    if (target && isGroupKey(key)) overrides.set(target, key);
+  }
+
+  return overrides;
+}
+
+function preferredGroupKey(group: { ownerId: string; label: string }, keysByTarget: ReadonlyMap<string, string>): string | undefined {
+  return keysByTarget.get(normalizeGroupKeyTarget(group.ownerId)) ?? keysByTarget.get(normalizeGroupKeyTarget(group.label));
+}
+
 export function buildExtensionCommandGroups(
   commands: PiCommand[],
   reservedKeys: ReadonlySet<string> = TOP_LEVEL_C_C_RESERVED_KEYS,
+  options: BuildCommandGroupsOptions = {},
 ): CommandGroup[] {
   const groupsByOwner = new Map<string, { label: string; commands: PiCommand[] }>();
 
@@ -126,16 +174,36 @@ export function buildExtensionCommandGroups(
 
   const reserved = new Set(reservedKeys);
   const groups = Array.from(groupsByOwner.entries()).sort((left, right) => left[1].label.localeCompare(right[1].label));
-  const keyedGroups: CommandGroup[] = [];
+  const assignedKeys = new Map<string, string>();
+  const envOverrides = parseGroupKeyOverrides(options.groupKeyOverrides ?? currentGroupKeyOverrideSpec());
+
+  const assign = (ownerId: string, key: string | undefined): boolean => {
+    if (!isGroupKey(key) || reserved.has(key)) return false;
+    reserved.add(key);
+    assignedKeys.set(ownerId, key);
+    return true;
+  };
 
   for (const [ownerId, group] of groups) {
-    const key = candidateKeysForLabel(group.label).find((candidate) => !reserved.has(candidate));
-    if (!key) continue;
-    reserved.add(key);
-    keyedGroups.push({ key, prefix: commandGroupPrefix(key), label: group.label, ownerId, commands: group.commands });
+    assign(ownerId, preferredGroupKey({ ownerId, label: group.label }, envOverrides));
   }
 
-  return keyedGroups;
+  for (const [ownerId, group] of groups) {
+    if (assignedKeys.has(ownerId)) continue;
+    assign(ownerId, preferredGroupKey({ ownerId, label: group.label }, CURATED_C_C_GROUP_KEYS));
+  }
+
+  for (const [ownerId, group] of groups) {
+    if (assignedKeys.has(ownerId)) continue;
+    assign(ownerId, candidateKeysForLabel(group.label).find((candidate) => !reserved.has(candidate)));
+  }
+
+  return groups
+    .map(([ownerId, group]) => {
+      const key = assignedKeys.get(ownerId);
+      return key ? { key, prefix: commandGroupPrefix(key), label: group.label, ownerId, commands: group.commands } : undefined;
+    })
+    .filter((group): group is CommandGroup => Boolean(group));
 }
 
 export default function (pi: ExtensionAPI) {
